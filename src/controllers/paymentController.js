@@ -1,6 +1,6 @@
 const paymentService = require("../services/paymentService");
 
-const createPayment = async (req, res) => {
+const createPayment = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const idempotencyKey = req.headers["idempotency-key"];
@@ -20,17 +20,19 @@ const createPayment = async (req, res) => {
       status: payment.status,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-const simulatePayment = async (req, res) => {
+const simulatePayment = async (req, res, next) => {
   try {
     const paymentId = req.params.id;
+    const userId = req.user.id; 
     const { status } = req.body;
 
     const updatedPayment = await paymentService.simulatePayment(
       paymentId,
+      userId,
       status
     );
 
@@ -39,7 +41,7 @@ const simulatePayment = async (req, res) => {
       status: updatedPayment.status,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err); 
   }
 };
 

@@ -28,6 +28,29 @@ app.get("/test-db", async (req, res) => {
 
 app.use("/api", paymentRoutes);
 
+app.use((req, res, next) => {
+  next(new AppError(`Route ${req.method} ${req.path} not found`, 404));
+});
+
+app.use((err, req, res, next) => {
+  console.error({
+    message: err.message,
+    statusCode: err.statusCode,
+    path: req.path,
+    method: req.method,
+    stack: err.isOperational ? undefined : err.stack,
+  });
+
+  if (err.isOperational) {
+    return res.status(err.statusCode).json({
+      error: err.message,
+    });
+  }
+  res.status(500).json({
+    error: "Something went wrong. Please try again.",
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

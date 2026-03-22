@@ -1,37 +1,55 @@
 const pool = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 const sendWebhook = require("../utils/webhookSender");
+const AppError = require('../utils/AppError');
 
 const createPayment = async (userId, data, idempotencyKey) => {
   const { amount, currency, webhook_url } = data;
+  const client = await pool.connect();
 
-  const existing = await pool.query(
-    `SELECT * FROM payments 
+  try {
+    await client.query("BEGIN");
+
+    const lockResult = await client.query(`SELECT hashtext($1) as lock_key`, [
+      `${userId}:${idempotencyKey}`,
+    ]);
+    const lockKey = lockResult.rows[0].lock_key;
+    await client.query(`SELECT pg_advisory_xact_lock($1)`, [lockKey]);
+
+    const existing = await pool.query(
+      `SELECT * FROM payments 
      WHERE user_id = $1 AND idempotency_key = $2`,
-    [userId, idempotencyKey]
-  );
+      [userId, idempotencyKey],
+    );
+    if (existing.rows.length > 0) {
+      await client.query("COMMIT");
+      return existing.rows[0];
+    }
+    const id = uuidv4();
 
-  if (existing.rows.length > 0) {
-    return existing.rows[0]; 
-  }
-
-  const id = uuidv4();
-
-  const result = await pool.query(
-    `INSERT INTO payments (id, user_id, amount, currency, webhook_url, idempotency_key)
+    const result = await pool.query(
+      `INSERT INTO payments (id, user_id, amount, currency, webhook_url, idempotency_key)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [id, userId, amount, currency, webhook_url, idempotencyKey]
-  );
+      [id, userId, amount, currency, webhook_url, idempotencyKey],
+    );
 
-  return result.rows[0];
+    await client.query("COMMIT");
+
+    return result.rows[0];
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
-const simulatePayment = async (paymentId, newStatus) => {
-  const result = await pool.query(
-    "SELECT * FROM payments WHERE id = $1",
-    [paymentId]
-  );
+const simulatePayment = async (paymentId, userId, newStatus) => {
+  const result = await pool.query("SELECT * FROM payments WHERE id = $1 AND user_id = $2", [
+    paymentId,
+    userId,
+  ]);
 
   if (result.rows.length === 0) {
     throw new Error("Payment not found");
@@ -44,30 +62,35 @@ const simulatePayment = async (paymentId, newStatus) => {
   };
 
   if (!validTransitions[payment.status]?.includes(newStatus)) {
-    throw new Error(
-      `Invalid transition from ${payment.status} to ${newStatus}`
+    throw new AppError(
+      `Invalid transition from ${payment.status} to ${newStatus}`,
+      400   
     );
   }
 
   const updated = await pool.query(
     "UPDATE payments SET status = $1 WHERE id = $2 RETURNING *",
-    [newStatus, paymentId]
+    [newStatus, paymentId],
   );
-  
+
   const updatedPayment = updated.rows[0];
 
   if (payment.webhook_url) {
-  await sendWebhook(
-    payment.webhook_url,
-    {
-      payment_id: updatedPayment.id,
-      status: updatedPayment.status,
-      amount: updatedPayment.amount,
-    },
-    updatedPayment.id,
-    updatedPayment.user_id
-  );
-}
+    setImmediate(() => {
+      sendWebhook(
+        payment.webhook_url,
+        {
+          payment_id: updatedPayment.id,
+          status: updatedPayment.status,
+          amount: updatedPayment.amount,
+        },
+        updatedPayment.id,
+        updatedPayment.user_id,
+      ).catch(err=>{
+        console.error('Background webhook job failed silently:', err.message);
+      });
+    });
+  }
 
   return updatedPayment;
 };
