@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
+const sendWebhook = require("../utils/webhookSender");
 
 const createPayment = async (userId, data, idempotencyKey) => {
   const { amount, currency, webhook_url } = data;
@@ -27,7 +28,6 @@ const createPayment = async (userId, data, idempotencyKey) => {
 };
 
 const simulatePayment = async (paymentId, newStatus) => {
-  // Fetch payment
   const result = await pool.query(
     "SELECT * FROM payments WHERE id = $1",
     [paymentId]
@@ -39,7 +39,6 @@ const simulatePayment = async (paymentId, newStatus) => {
 
   const payment = result.rows[0];
 
-  // 🔥 VALID STATE TRANSITIONS
   const validTransitions = {
     pending: ["success", "failed"],
   };
@@ -50,13 +49,27 @@ const simulatePayment = async (paymentId, newStatus) => {
     );
   }
 
-  // Update status
   const updated = await pool.query(
     "UPDATE payments SET status = $1 WHERE id = $2 RETURNING *",
     [newStatus, paymentId]
   );
+  
+  const updatedPayment = updated.rows[0];
 
-  return updated.rows[0];
+  if (payment.webhook_url) {
+  await sendWebhook(
+    payment.webhook_url,
+    {
+      payment_id: updatedPayment.id,
+      status: updatedPayment.status,
+      amount: updatedPayment.amount,
+    },
+    updatedPayment.id,
+    updatedPayment.user_id
+  );
+}
+
+  return updatedPayment;
 };
 
 module.exports = {
