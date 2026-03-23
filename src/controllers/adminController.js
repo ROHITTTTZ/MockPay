@@ -132,7 +132,6 @@ const getFraudRules = async (req, res, next) => {
     next(err);
   }
 };
-
 const toggleFraudRule = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -154,4 +153,129 @@ const toggleFraudRule = async (req, res, next) => {
     next(err);
   }
 };
-module.exports = { getDLQ, replayDLQ, listUsers, getFraudRules, toggleFraudRule };
+const getMetrics = async (req, res, next) => {
+  try {
+    const [
+      paymentStats,
+      webhookStats,
+      dlqDepth,
+      recentFraud,
+      auditStats,
+    ] = await Promise.all([
+
+      pool.query(`
+        SELECT
+          COUNT(*)                                          AS total,
+          COUNT(*) FILTER (WHERE status = 'pending')        AS pending,
+          COUNT(*) FILTER (WHERE status = 'success')        AS success,
+          COUNT(*) FILTER (WHERE status = 'failed')         AS failed,
+          COUNT(*) FILTER (WHERE status = 'flagged')        AS flagged,
+          COUNT(*) FILTER (WHERE status = 'refunded')       AS refunded,
+          COUNT(*) FILTER (WHERE status = 'partially_refunded') AS partially_refunded,
+          ROUND(AVG(amount)::numeric, 2)                    AS avg_amount,
+          ROUND(SUM(amount)::numeric, 2)                    AS total_volume,
+          COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS last_24h
+        FROM payments
+      `),
+      pool.query(`
+        SELECT
+          COUNT(*)                                          AS total_attempts,
+          COUNT(*) FILTER (WHERE status = 'success')        AS successful,
+          COUNT(*) FILTER (WHERE status = 'failed')         AS failed,
+          ROUND(
+            COUNT(*) FILTER (WHERE status = 'success') * 100.0
+            / NULLIF(COUNT(*), 0),
+          2)                                                AS delivery_rate_pct,
+          ROUND(AVG(retries)::numeric, 2)                   AS avg_retries
+        FROM webhook_logs
+      `),
+      pool.query(`
+        SELECT COUNT(*) AS depth
+        FROM pgboss.job
+        WHERE name  = 'webhook-delivery'
+          AND state = 'failed'
+      `),
+      pool.query(`
+        SELECT
+          COUNT(*)                                          AS total_flagged,
+          COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS flagged_24h
+        FROM payments
+        WHERE status = 'flagged'
+      `),
+      pool.query(`
+        SELECT
+          COUNT(*)                                          AS total_transitions,
+          COUNT(DISTINCT payment_id)                        AS payments_with_history,
+          COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS transitions_24h
+        FROM audit_log
+      `),
+
+    ]);
+
+    const p = paymentStats.rows[0];
+    const w = webhookStats.rows[0];
+    const d = dlqDepth.rows[0];
+    const f = recentFraud.rows[0];
+    const a = auditStats.rows[0];
+
+    res.json({
+      generated_at: new Date().toISOString(),
+
+      payments: {
+        total:               parseInt(p.total),
+        by_status: {
+          pending:            parseInt(p.pending),
+          success:            parseInt(p.success),
+          failed:             parseInt(p.failed),
+          flagged:            parseInt(p.flagged),
+          refunded:           parseInt(p.refunded),
+          partially_refunded: parseInt(p.partially_refunded),
+        },
+        last_24_hours:       parseInt(p.last_24h),
+        average_amount:      parseFloat(p.avg_amount) || 0,
+        total_volume:        parseFloat(p.total_volume) || 0,
+        success_rate_pct:    p.total > 0
+          ? parseFloat(
+              ((p.success / p.total) * 100).toFixed(2)
+            )
+          : 0,
+      },
+
+      webhooks: {
+        total_attempts:     parseInt(w.total_attempts),
+        successful:         parseInt(w.successful),
+        failed:             parseInt(w.failed),
+        delivery_rate_pct:  parseFloat(w.delivery_rate_pct) || 0,
+        average_retries:    parseFloat(w.avg_retries) || 0,
+        dlq_depth:          parseInt(d.depth),
+      },
+
+      fraud: {
+        total_flagged:      parseInt(f.total_flagged),
+        flagged_last_24h:   parseInt(f.flagged_24h),
+        flag_rate_pct:      p.total > 0
+          ? parseFloat(
+              ((f.total_flagged / p.total) * 100).toFixed(2)
+            )
+          : 0,
+      },
+
+      audit: {
+        total_transitions:     parseInt(a.total_transitions),
+        payments_with_history: parseInt(a.payments_with_history),
+        transitions_last_24h:  parseInt(a.transitions_24h),
+      },
+
+      system: {
+        job_queue:   'pg-boss',
+        database:    'postgresql',
+        environment: process.env.NODE_ENV || 'development',
+      },
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getDLQ, replayDLQ, listUsers, getFraudRules, toggleFraudRule, getMetrics };

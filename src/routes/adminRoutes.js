@@ -8,5 +8,6 @@ router.post('/dlq/:id/replay', adminController.replayDLQ);
 router.get('/users',          adminController.listUsers);
 router.get('/fraud-rules',        adminController.getFraudRules);
 router.patch('/fraud-rules/:id',  adminController.toggleFraudRule);
+router.get('/metrics', adminController.getMetrics);
 
 module.exports = router;
