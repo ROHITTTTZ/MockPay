@@ -45,7 +45,38 @@ const simulatePayment = async (req, res, next) => {
   }
 };
 
+const refundPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { refund_amount, reason } = req.body;
+
+    if (!refund_amount) {
+      return next(new AppError('refund_amount is required', 400));
+    }
+
+    const updatedPayment = await paymentService.refundPayment(
+      id,
+      req.user.id,
+      Number(refund_amount),
+      reason
+    );
+
+    res.json({
+      payment_id:      updatedPayment.id,
+      status:          updatedPayment.status,
+      original_amount: updatedPayment.amount,
+      refund_amount:   updatedPayment.refund_amount,
+      refunded_at:     updatedPayment.refunded_at,
+      refund_reason:   updatedPayment.refund_reason,
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createPayment,
   simulatePayment,
+  refundPayment,
 };

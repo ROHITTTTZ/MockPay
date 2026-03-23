@@ -102,7 +102,99 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
   return updatedPayment;
 };
 
+const refundPayment = async (paymentId, userId, refundAmount, reason) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Lock the row — prevent concurrent refunds on same payment
+    const result = await client.query(
+      'SELECT * FROM payments WHERE id = $1 AND user_id = $2 FOR UPDATE',
+      [paymentId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError('Payment not found', 404);
+    }
+
+    const payment = result.rows[0];
+
+    // Rule 1 — can only refund a successful payment
+    if (payment.status !== 'success') {
+      throw new AppError(
+        `Cannot refund a payment with status ${payment.status}. Only success payments can be refunded.`,
+        400
+      );
+    }
+
+    // Rule 2 — refund amount must be positive
+    if (!refundAmount || refundAmount <= 0) {
+      throw new AppError('Refund amount must be greater than 0', 400);
+    }
+
+    // Rule 3 — refund amount cannot exceed original payment amount
+    if (refundAmount > payment.amount) {
+      throw new AppError(
+        `Refund amount ${refundAmount} exceeds original payment amount ${payment.amount}`,
+        400
+      );
+    }
+
+    // Determine new status based on amount
+    // Full refund = exact amount returned
+    // Partial refund = less than original amount
+    const newStatus = refundAmount === Number(payment.amount)
+      ? 'refunded'
+      : 'partially_refunded';
+
+    const updated = await client.query(
+      `UPDATE payments
+       SET status        = $1,
+           refund_amount = $2,
+           refunded_at   = NOW(),
+           refund_reason = $3
+       WHERE id = $4
+       RETURNING *`,
+      [newStatus, refundAmount, reason || null, paymentId]
+    );
+
+    await client.query('COMMIT');
+
+    const updatedPayment = updated.rows[0];
+
+    // Fire refund webhook
+    if (updatedPayment.webhook_url) {
+      const boss = await getBoss();
+      await boss.send('webhook-delivery', {
+        url:        updatedPayment.webhook_url,
+        payment_id: updatedPayment.id,
+        user_id:    updatedPayment.user_id,
+        payload: {
+          event:         'payment.refunded',  // different event name
+          payment_id:    updatedPayment.id,
+          status:        updatedPayment.status,
+          original_amount: updatedPayment.amount,
+          refund_amount: updatedPayment.refund_amount,
+          currency:      updatedPayment.currency,
+          refund_reason: updatedPayment.refund_reason,
+          timestamp:     new Date().toISOString(),
+        }
+      });
+    }
+
+    return updatedPayment;
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   createPayment,
   simulatePayment,
+  refundPayment,
 };
