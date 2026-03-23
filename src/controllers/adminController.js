@@ -122,5 +122,36 @@ const listUsers = async (req, res, next) => {
     next(err);
   }
 };
+const getFraudRules = async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM fraud_rules ORDER BY created_at ASC`
+    );
+    res.json({ total: result.rows.length, rules: result.rows });
+  } catch (err) {
+    next(err);
+  }
+};
 
-module.exports = { getDLQ, replayDLQ, listUsers };
+const toggleFraudRule = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `UPDATE fraud_rules
+       SET is_active = NOT is_active
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return next(new AppError('Rule not found', 404));
+    }
+    res.json({
+      message: `Rule ${result.rows[0].is_active ? 'enabled' : 'disabled'}`,
+      rule:    result.rows[0],
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+module.exports = { getDLQ, replayDLQ, listUsers, getFraudRules, toggleFraudRule };

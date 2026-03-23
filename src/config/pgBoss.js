@@ -1,4 +1,5 @@
 const PgBoss = require('pg-boss').default ?? require('pg-boss');
+const logger = require('./logger');
 
 let boss = null;
 
@@ -19,11 +20,11 @@ const getBoss = async () => {
   });
 
   boss.on('error', err => {
-    console.error('pg-boss error:', err.message);
+    logger.error({ event: 'pgboss_error', error: err.message }, 'pg-boss error');
   });
 
   await boss.start();
-  console.log('pg-boss started');
+  logger.info({ event: 'pgboss_started' }, 'pg-boss started');
 
   return boss;
 };

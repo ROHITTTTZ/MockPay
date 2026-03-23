@@ -3,8 +3,11 @@ const { v4: uuidv4 } = require("uuid");
 const AppError = require('../utils/AppError');
 const getBoss = require('../config/pgBoss');
 const { logTransition } = require('./auditService');
+const { runFraudChecks } = require('./fraudService');
+const createLogger = require('../utils/createLogger');
 
 const createPayment = async (userId, data, idempotencyKey) => {
+  const log = createLogger({ user_id: userId });
   const { amount, currency, webhook_url } = data;
   const client = await pool.connect();
 
@@ -30,18 +33,72 @@ const createPayment = async (userId, data, idempotencyKey) => {
       return existing.rows[0];
     }
 
+    const fraudResult = await runFraudChecks(userId, Number(amount));
+    const initialStatus = fraudResult.flagged ? 'flagged' : 'pending';
+
     const id = uuidv4();
 
-    // FIX — use client not pool
     const result = await client.query(
-      `INSERT INTO payments (id, user_id, amount, currency, webhook_url, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO payments
+       (id, user_id, amount, currency, webhook_url, idempotency_key, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [id, userId, amount, currency, webhook_url, idempotencyKey]
+      [id, userId, amount, currency, webhook_url, idempotencyKey, initialStatus]
     );
 
+    const payment = result.rows[0];
+
+     await logTransition(client, {
+      paymentId:   payment.id,
+      userId,
+      oldStatus:   null,
+      newStatus:   initialStatus,
+      triggeredBy: 'create_api',
+      metadata: {
+        fraud_checked: true,
+        flagged:       fraudResult.flagged,
+        flag_reason:   fraudResult.reason || null,
+        flag_rule:     fraudResult.rule   || null,
+      }
+    });
+
     await client.query("COMMIT");
-    return result.rows[0];
+
+     if (fraudResult.flagged && webhook_url) {
+      const boss = await getBoss();
+      await boss.send('webhook-delivery', {
+        url:        webhook_url,
+        payment_id: payment.id,
+        user_id:    userId,
+        payload: {
+          event:      'fraud.detected',
+          payment_id: payment.id,
+          status:     'flagged',
+          amount:     payment.amount,
+          currency:   payment.currency,
+          reason:     fraudResult.reason,
+          rule:       fraudResult.rule,
+          timestamp:  new Date().toISOString(),
+        }
+      });
+
+       log.warn({
+        payment_id: payment.id,
+        event:      'payment_flagged',
+        reason:     fraudResult.reason,
+        rule:       fraudResult.rule,
+        amount,
+      }, 'Payment flagged by fraud engine');
+    }
+
+     log.info({
+        payment_id: payment.id,
+        event:      'payment_created',
+        amount,
+        currency,
+      }, 'Payment created successfully');
+
+    return payment;
 
   } catch (err) {
     await client.query("ROLLBACK");
@@ -99,6 +156,12 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
       metadata: { timestamp: new Date().toISOString() }
     });
 
+    log.info({
+      event: 'payment_simulated',
+      old_status: oldStatus,
+      new_status: newStatus,
+    }, 'Payment status updated');
+
     await client.query("COMMIT");
 
     const updatedPayment = updated.rows[0];
@@ -117,8 +180,11 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
           timestamp:  new Date().toISOString(),
         }
       });
-
-      console.log(`Webhook job enqueued for payment ${updatedPayment.id}`);
+      log.info({
+        event: 'webhook_enqueued',
+        payment_id: updatedPayment.id,
+        webhook_url: updatedPayment.webhook_url,
+      }, 'Webhook job enqueued due to status change');
     }
 
     return updatedPayment;

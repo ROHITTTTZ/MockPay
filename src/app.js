@@ -5,12 +5,33 @@ const AppError = require("./utils/AppError");
 const startWebhookWorker = require('./workers/webhookWorker');
 const authRoutes  = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const pinoHttp = require('pino-http');
+const logger   = require('./config/logger');
 
 require("dotenv").config();
 
 const app = express();
-
 app.use(express.json());
+
+app.use(pinoHttp({
+  logger,
+  customLogLevel: (req, res, err) => {
+    if (err || res.statusCode >= 500) return 'error';
+    if (res.statusCode >= 400)        return 'warn';
+    return 'info';
+  },
+  customSuccessMessage: (req, res) =>
+    `${req.method} ${req.url} ${res.statusCode}`,
+  customErrorMessage: (req, res, err) =>
+    `${req.method} ${req.url} ${res.statusCode} — ${err.message}`,
+  customProps: (req, res) => ({
+    user_id:    req.user?.id    || null,
+    request_id: req.id          || null,
+  }),
+  autoLogging: {
+    ignore: (req) => req.url === '/health',
+  },
+}));
 
 app.get("/", (req, res) => {
   res.send("Server is working");
@@ -29,13 +50,15 @@ app.use((req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error({
-    message: err.message,
+  logger.error({
+    event:      'request_error',
+    message:    err.message,
     statusCode: err.statusCode,
-    path: req.path,
-    method: req.method,
-    stack: err.isOperational ? undefined : err.stack,
-  });
+    path:       req.path,
+    method:     req.method,
+    user_id:    req.user?.id || null,
+    stack:      err.isOperational ? undefined : err.stack,
+  }, err.message);
 
   if (err.isOperational) {
     return res.status(err.statusCode).json({

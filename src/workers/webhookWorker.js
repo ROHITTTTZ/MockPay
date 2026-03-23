@@ -3,6 +3,7 @@ const getBoss = require('../config/pgBoss');
 const pool    = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { signPayload } = require('../utils/hmac'); 
+const createLogger = require('../utils/createLogger');
 
 const startWebhookWorker = async () => {
   const boss = await getBoss();
@@ -12,6 +13,7 @@ const startWebhookWorker = async () => {
   teamConcurrency: 5,
 }, async (job) => {
   const { url, payload, payment_id, user_id } = job.data;
+  const log = createLogger({ worker: 'webhook' });
   const MAX_RETRIES = 3;
 
   // Query retrycount directly from DB — v9 doesn't pass it on job object
@@ -26,7 +28,12 @@ const startWebhookWorker = async () => {
   const currentAttempt = retrycount + 1;
   const isLastAttempt  = currentAttempt >= MAX_RETRIES;
 
-  console.log(`Processing webhook for payment ${payment_id} — attempt ${currentAttempt} of ${MAX_RETRIES}`);
+   log.info({
+    event:    'webhook_processing',
+    job_id:   job.id,
+    attempt:  currentAttempt,
+    url,
+  }, 'Processing webhook job');
 
   try {
     const userResult = await pool.query(
@@ -58,10 +65,18 @@ const startWebhookWorker = async () => {
       [uuidv4(), payment_id, user_id, payloadString, currentAttempt]
     );
 
-    console.log(`Signed webhook delivered for payment ${payment_id} — attempt ${currentAttempt}`);
+     log.info({
+      event:   'webhook_delivered',
+      attempt: currentAttempt,
+    }, 'Webhook delivered successfully');
 
   } catch (err) {
-    console.error(`Webhook attempt ${currentAttempt} failed for payment ${payment_id}: ${err.message}`);
+    log.error({
+      event:   'webhook_failed',
+      attempt: currentAttempt,
+      error:   err.message,
+      url,
+    }, `Webhook attempt ${currentAttempt} failed`);
 
     if (isLastAttempt) {
       // Final attempt — log failure, mark job failed, do NOT throw
@@ -82,7 +97,10 @@ const startWebhookWorker = async () => {
         [job.id, currentAttempt]
       );
 
-      console.error(`All retries exhausted for payment ${payment_id} — moved to DLQ`);
+      log.error({
+        event: 'webhook_exhausted',
+      }, 'All retries exhausted — moved to DLQ');
+
 
       // Do NOT throw — we handled it, job is marked failed
       return;
@@ -101,8 +119,6 @@ const startWebhookWorker = async () => {
     throw err;
   }
 });
-
-  console.log('Webhook worker registered and listening');
 };
 
 module.exports = startWebhookWorker;
