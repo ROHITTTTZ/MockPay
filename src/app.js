@@ -1,5 +1,8 @@
 const express = require("express");
 const paymentRoutes = require("./routes/paymentRoutes");
+const getBoss = require('./config/pgBoss');
+const AppError = require("./utils/AppError");
+const startWebhookWorker = require('./workers/webhookWorker');
 
 require("dotenv").config();
 
@@ -53,6 +56,18 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const startServer = async () => {
+  try {
+    await getBoss();       
+    await startWebhookWorker(); 
+    
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  }
+};
+
+startServer();

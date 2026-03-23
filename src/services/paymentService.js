@@ -2,6 +2,7 @@ const pool = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 const sendWebhook = require("../utils/webhookSender");
 const AppError = require('../utils/AppError');
+const getBoss = require('../config/pgBoss');
 
 const createPayment = async (userId, data, idempotencyKey) => {
   const { amount, currency, webhook_url } = data;
@@ -75,21 +76,23 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
 
   const updatedPayment = updated.rows[0];
 
-  if (payment.webhook_url) {
-    setImmediate(() => {
-      sendWebhook(
-        payment.webhook_url,
-        {
-          payment_id: updatedPayment.id,
-          status: updatedPayment.status,
-          amount: updatedPayment.amount,
-        },
-        updatedPayment.id,
-        updatedPayment.user_id,
-      ).catch(err=>{
-        console.error('Background webhook job failed silently:', err.message);
-      });
+   if (updatedPayment.webhook_url) {
+    const boss = await getBoss();
+
+    await boss.send('webhook-delivery', {
+      url:        updatedPayment.webhook_url,
+      payment_id: updatedPayment.id,
+      user_id:    updatedPayment.user_id,
+      payload: {
+        payment_id: updatedPayment.id,
+        status:     updatedPayment.status,
+        amount:     updatedPayment.amount,
+        currency:   updatedPayment.currency,
+        timestamp:  new Date().toISOString(),
+      }
     });
+
+    console.log(`Webhook job enqueued for payment ${updatedPayment.id}`);
   }
 
   return updatedPayment;
