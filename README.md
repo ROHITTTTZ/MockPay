@@ -7,8 +7,8 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
 
-**Live API →** `https://mockpay.onrender.com`  
-**GitHub →** `https://github.com/rohithpradeep/mockpay`
+**Live API →** `https://mockpay-mj7g.onrender.com`  
+**GitHub →** `https://github.com/ROHITTTTZ/MockPay`
 
 ---
 
