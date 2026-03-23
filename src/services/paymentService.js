@@ -53,7 +53,7 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
   ]);
 
   if (result.rows.length === 0) {
-    throw new Error("Payment not found");
+    throw new AppError("Payment not found", 404);
   }
 
   const payment = result.rows[0];
@@ -90,7 +90,11 @@ const simulatePayment = async (paymentId, userId, newStatus) => {
         currency:   updatedPayment.currency,
         timestamp:  new Date().toISOString(),
       }
-    });
+    },{
+  retryLimit:   3,
+  retryDelay:   2,
+  retryBackoff: true,
+});
 
     console.log(`Webhook job enqueued for payment ${updatedPayment.id}`);
   }

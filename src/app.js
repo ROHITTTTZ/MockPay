@@ -3,6 +3,8 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const getBoss = require('./config/pgBoss');
 const AppError = require("./utils/AppError");
 const startWebhookWorker = require('./workers/webhookWorker');
+const authRoutes  = require('./routes/authRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 require("dotenv").config();
 
@@ -18,17 +20,8 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-app.get("/test-db", async (req, res) => {
-  const pool = require("./config/db");
-
-  try {
-    const result = await pool.query("SELECT NOW()");
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use("/api", paymentRoutes);
 
 app.use((req, res, next) => {
