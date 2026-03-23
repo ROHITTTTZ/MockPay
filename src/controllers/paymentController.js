@@ -1,4 +1,5 @@
 const paymentService = require("../services/paymentService");
+const pool = require('../config/db');
 
 const createPayment = async (req, res, next) => {
   try {
@@ -75,8 +76,46 @@ const refundPayment = async (req, res, next) => {
   }
 };
 
+const getAuditLog = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const payment = await pool.query(
+      'SELECT id FROM payments WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+
+    if (payment.rows.length === 0) {
+      return next(new AppError('Payment not found', 404));
+    }
+
+    const logs = await pool.query(
+      `SELECT
+         id,
+         old_status,
+         new_status,
+         triggered_by,
+         metadata,
+         created_at
+       FROM audit_log
+       WHERE payment_id = $1
+       ORDER BY created_at ASC`,
+      [id]
+    );
+
+    res.json({
+      payment_id: id,
+      total_events: logs.rows.length,
+      history: logs.rows,
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createPayment,
   simulatePayment,
   refundPayment,
+  getAuditLog,
 };
