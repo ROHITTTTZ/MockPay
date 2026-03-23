@@ -7,12 +7,20 @@ const authRoutes  = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const pinoHttp = require('pino-http');
 const logger   = require('./config/logger');
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
+const cors = require("cors");
+
 
 require("dotenv").config();
 
 const app = express();
 app.use(express.json());
-
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PATCH", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"]
+}));
 app.use(pinoHttp({
   logger,
   customLogLevel: (req, res, err) => {
@@ -32,6 +40,8 @@ app.use(pinoHttp({
     ignore: (req) => req.url === '/health',
   },
 }));
+
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.get("/", (req, res) => {
   res.send("Server is working");
